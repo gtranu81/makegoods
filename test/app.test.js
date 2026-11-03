@@ -87,6 +87,31 @@ test('design images require teacher generation and are private until selected an
  assert.equal((await getImage(cookieStudent,2)).status,404);
  const output=(await call('/requests','GET',null,cookieStudent)).data.requests.find(r=>r.id===id);assert.equal(output.candidates[0].imageUrl,`/api/requests/${id}/images/1`);
 });
+test('teacher can deliver a custom design with a private uploaded image, without AI generation',async()=>{
+ const id=(await call('/requests','POST',{...request,type:'design'},cookieOther)).data.id;
+ const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=';
+ const payload={manual:{title:'직접 만든 제주 시안',summary:'교사가 준비한 디자인',content:'제주 바다 문양과 파란색을 사용해요.',image},reviewConfirmed:true};
+ const balance=(await call('/me','GET',null,cookieOther)).data.user.balance;
+ assert.equal((await call(`/requests/${id}/release`,'POST',payload,cookieOther)).status,403);
+ assert.equal((await call(`/requests/${id}/release`,'POST',{...payload,reviewConfirmed:false},cookieTeacher)).status,400);
+ assert.equal((await call(`/requests/${id}/release`,'POST',{...payload,manual:{...payload.manual,image:'data:image/png;base64,YmFk'}},cookieTeacher)).status,400);
+ assert.equal((await call(`/requests/${id}/release`,'POST',{...payload,manual:{...payload.manual,content:''}},cookieTeacher)).status,400);
+ const url=base+`/api/requests/${id}/images/4`;
+ assert.equal((await fetch(url,{headers:{Cookie:cookieOther}})).status,404);
+ assert.equal((await call(`/requests/${id}/release`,'POST',payload,cookieTeacher)).status,200);
+ const result=(await call('/requests','GET',null,cookieOther)).data.requests.find(r=>r.id===id);
+ assert.equal(result.source,'teacher');assert.equal(result.assessment,null);assert.equal(result.candidates.length,1);assert.equal(result.candidates[0].title,payload.manual.title);assert.equal(result.candidates[0].imageUrl,`/api/requests/${id}/images/4`);
+ const visible=await fetch(url,{headers:{Cookie:cookieOther}});assert.equal(visible.status,200);assert.equal(visible.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await visible.arrayBuffer()),Buffer.from(image.split(',')[1],'base64'));
+ assert.equal((await fetch(url,{headers:{Cookie:cookieStudent}})).status,404);
+ assert.equal((await call(`/requests/${id}/release`,'POST',payload,cookieTeacher)).status,409);
+ assert.equal((await call('/me','GET',null,cookieOther)).data.user.balance,balance);
+ const second=(await call('/requests','POST',{...request,type:'design'},cookieOther)).data.id;
+ await call(`/requests/${second}/generate`,'POST',{},cookieTeacher);
+ assert.equal((await call(`/requests/${second}/release`,'POST',{...payload,manual:{...payload.manual,image:null}},cookieTeacher)).status,200);
+ const secondResult=(await call('/requests','GET',null,cookieOther)).data.requests.find(r=>r.id===second);
+ assert.deepEqual(secondResult.candidates.map(c=>c.id),[4]);assert.equal(secondResult.candidates[0].imageUrl,null);
+ await stop();await start();assert.equal((await fetch(base+`/api/requests/${id}/images/4`,{headers:{Cookie:cookieOther}})).status,200);
+});
 test('session security, account disabling, password reset and persistence across restart',async()=>{
  assert.equal((await call('/requests','POST',request,cookieStudent,{Origin:'https://untrusted.example'})).status,403);
  const me=(await call('/me','GET',null,cookieTeacher)).data.user;assert.equal(me.hash,undefined);assert.equal(me.salt,undefined);

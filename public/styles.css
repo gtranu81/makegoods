@@ -5,3 +5,5 @@
 @media print{body{background:#fff;font-size:11px}.sidebar,.topbar,.no-print,.filters,#toast,.footer-note,.modal-bg{display:none!important}.shell,.main{display:block}.content{padding:0;max-width:none}.print-title{display:block;margin-bottom:15px}.panel,.candidate,.assessment{break-inside:avoid;box-shadow:none;border-color:#ccc}.candidate pre{font-size:11px}.heading h1{font-size:23px}th,td{padding:8px}.notice{font-size:10px}.stats,.hero,.service-grid{display:none}.answer-grid dd{font-size:11px}}
 
 .design-preview{display:block;width:100%;max-width:520px;max-height:520px;object-fit:contain;border-radius:10px;margin:18px 0;border:1px solid var(--line)}
+
+.design-preview[hidden]{display:none}

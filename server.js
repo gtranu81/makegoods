@@ -52,7 +52,7 @@ function parseRequest(r, role){
 }
 const rates=new Map();
 function rate(key, limit=12){const ts=Date.now();let r=rates.get(key);if(!r||ts-r.start>600000){r={start:ts,count:0};rates.set(key,r);}if(++r.count>limit)fail(429,'시도가 많습니다. 10분 뒤 다시 시도해 주세요.');}
-async function body(req){let data='';for await(const chunk of req){data+=chunk;if(Buffer.byteLength(data)>32768)fail(413,'입력 내용이 너무 큽니다.');}try{return JSON.parse(data||'{}');}catch{fail(400,'요청 형식이 올바르지 않습니다.');}}
+async function body(req,limit=32768){let data='';for await(const chunk of req){data+=chunk;if(Buffer.byteLength(data)>limit)fail(413,'입력 내용이 너무 큽니다.');}try{return JSON.parse(data||'{}');}catch{fail(400,'요청 형식이 올바르지 않습니다.');}}
 function createUser(b,role){
  const username=text(b.username,3,40);if(!/^[a-zA-Z0-9_.-]+$/.test(username))fail(400,'아이디는 영문, 숫자, _, -, .만 사용할 수 있습니다.');
  const name=text(b.name,1,60),pw=password(b.password),salt=randomBytes(16).toString('hex');
@@ -144,15 +144,15 @@ async function api(req,res,url){
  }
  const im=path.match(/^\/api\/requests\/(\d+)\/images\/(\d+)$/);
  if(im){
-  const id=Number(im[1]),candidate=integer(Number(im[2]),1,3),r=db.prepare('SELECT * FROM requests WHERE id=?').get(id);
+  const id=Number(im[1]),candidate=integer(Number(im[2]),1,4),r=db.prepare('SELECT * FROM requests WHERE id=?').get(id);
   if(!r||(user.role!=='teacher'&&r.user_id!==user.id))fail(404,'이미지를 찾을 수 없습니다.');
   if(method==='GET'){
    if(user.role!=='teacher'&&(r.status!=='released'||!JSON.parse(r.selected||'[]').includes(candidate)))fail(404,'이미지를 찾을 수 없습니다.');
    const img=db.prepare('SELECT path FROM images WHERE request_id=? AND candidate_id=?').get(id,candidate);if(!img)fail(404,'아직 생성된 이미지가 없습니다.');
-   return {binary:readFileSync(img.path),mime:'image/png'};
+   return {binary:readFileSync(img.path),mime:img.path.endsWith('.jpg')?'image/jpeg':img.path.endsWith('.webp')?'image/webp':'image/png'};
   }
   if(method==='POST'){
-   teacher(user);if(r.type!=='design'||r.status!=='review')fail(400,'검토 중인 디자인 의뢰에서 이미지를 만들 수 있습니다.');
+   teacher(user);if(candidate===4)fail(400,'직접 작성한 시안은 첨부 이미지를 사용합니다.');if(r.type!=='design'||r.status!=='review')fail(400,'검토 중인 디자인 의뢰에서 이미지를 만들 수 있습니다.');
    if(!process.env.AI_API_KEY)fail(400,'이미지 생성은 실제 AI API 연결이 필요합니다.');
    if(generating.has(id))fail(409,'다른 후보나 이미지를 작성하고 있습니다.');generating.add(id);
    try{
@@ -170,7 +170,28 @@ async function api(req,res,url){
    if(generating.has(id))fail(409,'후보를 작성하고 있습니다.');generating.add(id);
    try{const {result,source}=await generate(r);const updated=db.prepare("UPDATE requests SET candidates=?,assessment=?,source=?,status='review' WHERE id=? AND status!='released'").run(JSON.stringify(result.candidates),JSON.stringify(result.assessment),source,id);if(!updated.changes)fail(409,'이미 전송된 결과입니다.');db.prepare('DELETE FROM images WHERE request_id=?').run(id);return {ok:true,source};}catch(e){if(e.status)throw e;console.error('Generation failed:',e.name);fail(502,'AI 후보 작성에 실패했습니다. 연결 및 API 설정을 확인한 뒤 다시 시도해 주세요. 코인은 추가로 차감되지 않습니다.');}finally{generating.delete(id);}
   }
-  if(generating.has(id))fail(409,'후보 작성이 끝난 후 전송해 주세요.');const b=await body(req);if(r.status!=='review')fail(400,'먼저 후보를 작성해 주세요.');
+  if(generating.has(id))fail(409,'후보 작성이 끝난 후 전송해 주세요.');const b=await body(req,3*1024*1024);
+  if(db.prepare('SELECT status FROM requests WHERE id=?').get(id).status==='released')fail(409,'이미 전송한 결과는 변경할 수 없습니다.');
+  if(generating.has(id))fail(409,'후보 작성이 끝난 후 전송해 주세요.');
+  if(b.manual){
+   if(r.type!=='design')fail(400,'디자인 의뢰에서만 직접 작성할 수 있습니다.');
+   if(b.reviewConfirmed!==true)fail(400,'전송 전 검토 확인이 필요합니다.');
+   const c={id:4,title:text(b.manual.title,1,100),summary:text(b.manual.summary,1,500),content:text(b.manual.content,1,7000)};
+   const note=text(b.teacherNote||'선생님이 직접 작성한 디자인입니다.',1,3000);
+   let bytes,ext;
+   if(b.manual.image){
+    const match=typeof b.manual.image==='string'&&b.manual.image.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
+    if(!match)fail(400,'PNG, JPEG, WebP 이미지만 첨부할 수 있습니다.');
+    bytes=Buffer.from(match[2],'base64');ext=match[1]==='jpeg'?'jpg':match[1];
+    if(bytes.length>2*1024*1024)fail(413,'이미지는 2MB 이하로 첨부해 주세요.');
+    const valid=ext==='png'?bytes.subarray(0,8).toString('hex')==='89504e470d0a1a0a':ext==='jpg'?bytes.subarray(0,3).toString('hex')==='ffd8ff':bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP';
+    if(!valid)fail(400,'올바른 이미지 파일을 첨부해 주세요.');
+   }
+   if(bytes){const folder=join(dirname(dbPath),'images');mkdirSync(folder,{recursive:true});const file=join(folder,`${id}-4-${randomBytes(8).toString('hex')}.${ext}`);writeFileSync(file,bytes);db.prepare('INSERT OR REPLACE INTO images VALUES(?,?,?)').run(id,4,file);}
+   db.prepare("UPDATE requests SET candidates=?,assessment=NULL,selected='[4]',source='teacher',teacher_note=?,status='released',released_at=? WHERE id=?").run(JSON.stringify([...JSON.parse(r.candidates||'[]').filter(c=>c.id!==4),c]),note,now(),id);
+   return {ok:true};
+  }
+  if(r.status!=='review')fail(400,'먼저 후보를 작성해 주세요.');
   if(!Array.isArray(b.selected)||b.selected.length<1||b.selected.length>3||new Set(b.selected).size!==b.selected.length||b.selected.some(x=>![1,2,3].includes(x)))fail(400,'전송할 후보를 1개 이상 선택해 주세요.');if(b.reviewConfirmed!==true)fail(400,'전송 전 검토 확인이 필요합니다.');
   const candidates=b.candidates?validateResult({candidates:b.candidates,assessment:b.assessment||JSON.parse(r.assessment)}):{candidates:JSON.parse(r.candidates),assessment:JSON.parse(r.assessment)};
   db.prepare("UPDATE requests SET candidates=?,assessment=?,selected=?,teacher_note=?,status='released',released_at=? WHERE id=?").run(JSON.stringify(candidates.candidates),JSON.stringify(candidates.assessment),JSON.stringify(b.selected),text(b.teacherNote||'선생님이 검토한 결과입니다.',1,3000),now(),id);return {ok:true};
