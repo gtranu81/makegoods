@@ -115,6 +115,15 @@ test('teacher can deliver a custom design with a private uploaded image, without
  assert.deepEqual(secondResult.candidates.map(c=>c.id),[4]);assert.equal(secondResult.candidates[0].imageUrl,null);
  await stop();await start();assert.equal((await fetch(base+`/api/requests/${id}/images/4`,{headers:{Cookie:cookieOther}})).status,200);
 });
+test('without an AI key, growth records remain factual observations and private until teacher review',async()=>{
+ let teacherView;
+ for(let i=0;i<100;i++){teacherView=(await call('/growth?userId='+studentId,'GET',null,cookieTeacher)).data;if(teacherView.records.every(r=>!['pending','running'].includes(r.status)))break;await new Promise(r=>setTimeout(r,20));}
+ assert.ok(teacherView.records.length>0);assert.ok(teacherView.records.every(r=>r.source==='observation'));
+ const record=teacherView.records.find(r=>r.kind==='request');assert.match(record.report.teacherNarrative,/AI 미연결/);
+ const studentView=(await call('/growth','GET',null,cookieStudent)).data;assert.ok(studentView.records.every(r=>r.report===null));assert.equal(studentView.events,undefined);
+ assert.equal((await call('/growth/'+record.id,'PATCH',{version:record.version,report:{next:'다음에는 사용할 사람을 한 가지 예로 설명해 보세요.'},approve:true,reviewConfirmed:true},cookieTeacher)).status,200);
+ const visible=(await call('/growth','GET',null,cookieStudent)).data.records.find(r=>r.id===record.id);assert.equal(visible.report.next,'다음에는 사용할 사람을 한 가지 예로 설명해 보세요.');assert.equal(visible.report.teacherNarrative,undefined);
+});
 test('session security, account disabling, password reset and persistence across restart',async()=>{
  assert.equal((await call('/requests','POST',request,cookieStudent,{Origin:'https://untrusted.example'})).status,403);
  const me=(await call('/me','GET',null,cookieTeacher)).data.user;assert.equal(me.hash,undefined);assert.equal(me.salt,undefined);

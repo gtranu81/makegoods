@@ -14,6 +14,27 @@
  function refresh(){data.users.forEach(u=>{if(u.role==='student'&&u.periodLimit===null&&u.coinDay!==today()){addLedger(u.id,u.dailyLimit-u.balance,'하루 코인 초기화');u.balance=u.dailyLimit;u.coinDay=today();}});}
  function outputType(r){const seen=new Set();while(r?.type==='revision'&&r.parentId&&!seen.has(r.id)){seen.add(r.id);r=data.requests.find(p=>p.id===r.parentId);}return r?.type||'revision';}
  function view(r){const copy=structuredClone(r);copy.outputType=outputType(r);if(current.role!=='teacher'){if(r.status!=='released'){delete copy.candidates;delete copy.assessment;delete copy.teacherNote;delete copy.source;}else copy.candidates=copy.candidates.filter(c=>copy.selected.includes(c.id));delete copy.selected;}return copy;}
+ const growthPolicy=globalThis.growthPolicy;
+ data.growthRecords??=[];data.growthEvents??=[];data.growthRevisions??=[];data.growthVersion??=0;
+ function growthHistory(userId){return data.requests.filter(r=>r.userId===userId).toSorted((a,b)=>a.id-b.id).map((r,i)=>({id:r.id,userId:r.userId,sequence:i+1,type:r.type,activity:r.answers.activity||null,parentId:r.parentId,createdAt:r.createdAt,answers:r.answers,final:r.status==='released'?{candidates:r.candidates.filter(c=>r.selected.includes(c.id)),teacherNote:r.teacherNote,source:r.source,releasedAt:r.releasedAt}:null}));}
+ function growthEvent(r,kind){data.growthEvents.push({id:data.growthEvents.length+1,requestId:r.id,userId:r.userId,kind,createdAt:timestamp(),data:structuredClone({answers:r.answers,candidates:r.candidates||[],source:r.source,selected:r.selected||[],images:(r.candidates||[]).filter(c=>c.imageUrl).map(c=>({candidateId:c.id,imageUrl:c.imageUrl}))})});}
+ function refreshGrowth(userId,requestId){
+  const all=growthHistory(userId),current=all.find(r=>r.id===requestId),history=all.filter(r=>r.id<=requestId);
+  for(const kind of ['request','summary']){
+   const draft=kind==='summary'?growthPolicy.summaryObservation(all):growthPolicy.observation(current,history);
+   let row=data.growthRecords.find(r=>r.userId===userId&&r.kind===kind&&(kind==='summary'||r.requestId===requestId));
+   if(!row){row={id:data.growthRecords.length+1,userId,kind,requestId:kind==='summary'?null:requestId};data.growthRecords.push(row);}
+   Object.assign(row,{comparisonId:kind==='request'?growthPolicy.comparison(current,history).previous?.id||null:null,status:'review',source:'observation',version:String(++data.growthVersion),generatedAt:timestamp(),report:draft});
+   data.growthRevisions.push({recordId:row.id,action:'generated',data:structuredClone(draft),created_at:timestamp()});
+  }
+ }
+ function growthView(userId){
+  const group=data.users.find(u=>u.id===userId&&u.role==='student');if(!group)error(404,'모둠을 찾을 수 없습니다.');
+  return {group:{id:group.id,name:group.name},history:growthHistory(userId),records:data.growthRecords.filter(r=>r.userId===userId).map(r=>{
+   const teacher=current.role==='teacher',out={id:r.id,kind:r.kind,requestId:r.requestId,comparisonId:r.comparisonId,status:r.status,source:r.source,version:r.version,generatedAt:r.generatedAt,reviewedAt:r.reviewedAt,report:teacher?r.report:r.status==='approved'?Object.fromEntries(Object.entries(r.approved).filter(([key])=>!['teacherNarrative','teacherGuidance'].includes(key))):null};
+   if(teacher)out.revisions=data.growthRevisions.filter(v=>v.recordId===r.id);return structuredClone(out);
+  }),...(current.role==='teacher'?{events:data.growthEvents.filter(e=>e.userId===userId)}:{})};
+ }
  window.fetch=async(input,options={})=>{
   try{
    const path=String(input).replace(/^\/api/,'');const method=options.method||'GET',b=JSON.parse(options.body||'{}');refresh();let out;
@@ -44,6 +65,22 @@
      if(b.periodLimit!==undefined)addLedger(u.id,before-u.balance,'코인 운영 방식 변경');
      if(b.adjustment)addLedger(u.id,b.adjustment,b.reason||'교사 코인 조정');Object.assign(u,copy);out={ok:true};
     }else if(path==='/ledger')out={entries:data.ledger.filter(l=>current.role==='teacher'||l.user_id===current.id)};
+    else if(path==='/growth'||path.startsWith('/growth?')){
+     const requested=Number(path.match(/[?&]userId=(\d+)/)?.[1])||current.id;
+     if(current.role!=='teacher'&&requested!==current.id)error(403,'자기 모둠의 성장 기록만 볼 수 있습니다.');out=growthView(requested);
+    }else if(/^\/growth\/\d+(\/retry)?$/.test(path)){
+     requireTeacher();const row=data.growthRecords.find(r=>r.id===Number(path.split('/')[2]));if(!row)error(404,'성장 기록을 찾을 수 없습니다.');
+     if(path.endsWith('/retry')){const request=row.requestId||growthHistory(row.userId).at(-1).id;refreshGrowth(row.userId,request);out={ok:true};}
+     else{
+      if(b.version!==row.version)error(409,'기록이 바뀌었습니다. 새로고침해 주세요.');
+      if(b.approve&&!b.reviewConfirmed)error(400,'원문과 근거 검토 확인이 필요합니다.');
+      const keys=row.kind==='summary'?['initial','changes','strongest','next','teacherNarrative']:['before','now','growth','resultChange','next','teacherNarrative','teacherGuidance'];const report=structuredClone(row.report);
+      for(const key of keys)if(b.report?.[key]!==undefined){if(typeof b.report[key]!=='string'||!b.report[key].trim()||b.report[key].length>4000)error(400,'기록은 각 항목 4,000자 이내로 적어 주세요.');report[key]=b.report[key];}
+      for(const area of b.report?.areas||[]){const target=report.areas?.find(a=>a.key===area.key);if(!target||typeof area.finding!=='string'||!area.finding.trim()||area.finding.length>4000)error(400,'관찰 내용을 확인해 주세요.');target.finding=area.finding;}
+      (b.report?.examples||[]).forEach((e,i)=>{if(!report.examples?.[i]||typeof e.description!=='string'||!e.description.trim()||e.description.length>4000)error(400,'사례 설명을 확인해 주세요.');report.examples[i].description=e.description;});
+      row.report=report;row.version=String(++data.growthVersion);row.status=b.approve?'approved':'review';row.reviewedAt=b.approve?timestamp():null;if(b.approve)row.approved=structuredClone(report);data.growthRevisions.push({recordId:row.id,action:b.approve?'approved':'edited',data:structuredClone(report),created_at:timestamp()});out={ok:true};
+     }
+    }
     else if(path==='/requests'&&method==='GET')out={requests:data.requests.filter(r=>current.role==='teacher'||r.userId===current.id).map(view)};
     else if(path==='/requests'&&method==='POST'){
      if(current.role!=='student')error(403,'학생 체험에서 의뢰해 주세요.');if(current.balance<1)error(400,'코인이 부족해요. 교사 체험에서 코인을 추가해 주세요.');
@@ -57,7 +94,7 @@
       b.title=activity.name;b.answers={activity:code,...Object.fromEntries(['q1','q2','q3'].map(k=>[k,b.answers[k].trim()]))};
      }else if(!['idea','market','design','revision','marketing'].includes(b.type)||!b.title?.trim()||['goods','country','audience','purpose','details','format'].some(k=>!b.answers?.[k]?.trim()))error(400,'모든 내용을 적어 주세요.');
      if(b.parentId&&!data.requests.some(r=>r.id===b.parentId&&r.userId===current.id&&r.status==='released'))error(400,'전달된 결과에 추가 요청해 주세요.');
-     const r={id:Math.max(0,...data.requests.map(r=>r.id))+1,userId:current.id,groupName:current.name,parentId:b.parentId||null,type:b.type,title:b.title,answers:b.answers,status:'pending',createdAt:timestamp(),releasedAt:null};data.requests.unshift(r);current.balance--;addLedger(current.id,-1,`의뢰 #${r.id} 제출`);out={id:r.id};
+     const r={id:Math.max(0,...data.requests.map(r=>r.id))+1,userId:current.id,groupName:current.name,parentId:b.parentId||null,type:b.type,title:b.title,answers:b.answers,status:'pending',createdAt:timestamp(),releasedAt:null};data.requests.unshift(r);growthEvent(r,'submitted');refreshGrowth(current.id,r.id);current.balance--;addLedger(current.id,-1,`의뢰 #${r.id} 제출`);out={id:r.id};
     }else{
      const match=path.match(/^\/requests\/(\d+)\/(generate|release)$/);if(!match)error(404,'오프라인 체험에서 지원하지 않는 기능입니다.');requireTeacher();const r=data.requests.find(r=>r.id===Number(match[1]));if(!r)error(404,'의뢰서를 찾을 수 없습니다.');if(r.status==='released')error(409,'이미 전송했습니다.');
      if(match[2]==='generate'&&r.answers.activity){
@@ -79,10 +116,12 @@
      }
     }
    }
+   if(typeof path==='string'&&/^\/requests\/\d+\/(generate|release)$/.test(path)&&out?.ok){const r=data.requests.find(r=>r.id===Number(path.split('/')[2]));growthEvent(r,path.endsWith('/generate')?'ai_draft':'teacher_final');if(path.endsWith('/release'))refreshGrowth(r.userId,r.id);}
    save();return new Response(JSON.stringify(out),{status:200,headers:{'Content-Type':'application/json'}});
   }catch(e){return new Response(JSON.stringify({error:e.message}),{status:e.status||400,headers:{'Content-Type':'application/json'}});}
  };
- window.jejuDemoReset=()=>{data=fresh();current=null;save();};
+ for(const r of data.requests.toSorted((a,b)=>a.id-b.id))if(!data.growthRecords.some(g=>g.requestId===r.id)){growthEvent(r,'legacy_snapshot');refreshGrowth(r.userId,r.id);}
+ window.jejuDemoReset=()=>{data=fresh();data.growthRecords=[];data.growthEvents=[];data.growthRevisions=[];data.growthVersion=0;current=null;save();};
  window.jejuDemoLogin=async role=>{
   const u=data.users.find(u=>u.role===role);if(!u)return;await fetch('/api/login',{method:'POST',body:JSON.stringify({username:u.username,password:u.password})});
  };

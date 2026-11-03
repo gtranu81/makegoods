@@ -1,4 +1,5 @@
 import './public/activities.js';
+import {createGrowthStore} from './growth.js';
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
@@ -18,6 +19,12 @@ CREATE TABLE IF NOT EXISTS requests(id INTEGER PRIMARY KEY,user_id INTEGER NOT N
 CREATE TABLE IF NOT EXISTS images(request_id INTEGER REFERENCES requests(id),candidate_id INTEGER NOT NULL,path TEXT NOT NULL,PRIMARY KEY(request_id,candidate_id));
 CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),delta INTEGER NOT NULL,reason TEXT NOT NULL,actor_id INTEGER REFERENCES users(id),created_at TEXT NOT NULL);
 INSERT OR IGNORE INTO settings VALUES('project_name','당신의 창업을 응원합니다');`);
+const growth=createGrowthStore(db);
+function recordSnapshot(id,kind,extra={}){
+ const row=db.prepare('SELECT * FROM requests WHERE id=?').get(id);
+ const images=db.prepare('SELECT candidate_id,path FROM images WHERE request_id=?').all(id).map(img=>({candidateId:img.candidate_id,path:img.path}));
+ growth.capture(id,kind,{answers:JSON.parse(row.answers),type:row.type,candidates:JSON.parse(row.candidates||'[]'),assessment:JSON.parse(row.assessment||'null'),selected:JSON.parse(row.selected||'[]'),teacherNote:row.teacher_note,source:row.source,images,...extra});
+}
 const now = () => new Date().toISOString();
 const day = () => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul'}).format(new Date());
 const fail = (status, message) => { const e = new Error(message); e.status = status; throw e; };
@@ -118,7 +125,7 @@ async function generateImage(r,c){
  const bytes=Buffer.from(b64,'base64');if(bytes.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('PNG required');
  const folder=join(dirname(dbPath),'images');mkdirSync(folder,{recursive:true});
  const file=join(folder,`${r.id}-${c.id}-${randomBytes(8).toString('hex')}.png`);writeFileSync(file,bytes);
- db.prepare('INSERT OR REPLACE INTO images VALUES(?,?,?)').run(r.id,c.id,file);
+ db.prepare('INSERT OR REPLACE INTO images VALUES(?,?,?)').run(r.id,c.id,file);growth.capture(r.id,'ai_image',{images:[{candidateId:c.id,path:file}]});
 }
 const generating=new Set();
 async function api(req,res,url){
@@ -151,6 +158,25 @@ async function api(req,res,url){
  if(!user)fail(401,'로그인이 필요합니다.');user=refresh(user);
  if(path==='/api/logout'&&method==='POST'){db.prepare('DELETE FROM sessions WHERE token=?').run(tokenHash);res.setHeader('Set-Cookie','session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return {ok:true};}
  if(path==='/api/me'&&method==='GET')return {user:publicUser(user),aiEnabled:!!process.env.AI_API_KEY,projectName:db.prepare("SELECT value FROM settings WHERE key='project_name'").get().value};
+ const historicalImage=path.match(/^\/api\/growth-history\/(\d+)\/images\/(\d+)$/);
+ if(historicalImage&&method==='GET'){
+  teacher(user);const event=db.prepare('SELECT * FROM request_history WHERE id=?').get(Number(historicalImage[1]));
+  const img=event&&JSON.parse(event.data).images?.find(img=>img.candidateId===Number(historicalImage[2]));
+  if(!img)fail(404,'이력 이미지를 찾을 수 없습니다.');return {binary:readFileSync(img.path),mime:img.path.endsWith('.jpg')?'image/jpeg':img.path.endsWith('.webp')?'image/webp':'image/png'};
+ }
+ if(path==='/api/growth'&&method==='GET'){
+  const userId=user.role==='teacher'?integer(Number(url.searchParams.get('userId')),1,Number.MAX_SAFE_INTEGER):user.id;
+  if(user.role!=='teacher'&&url.searchParams.has('userId')&&Number(url.searchParams.get('userId'))!==user.id)fail(403,'자기 모둠의 성장 기록만 볼 수 있습니다.');
+  const owner=db.prepare("SELECT id,name FROM users WHERE id=? AND role='student'").get(userId);if(!owner)fail(404,'학생 모둠을 찾을 수 없습니다.');
+  const history=growth.history(userId).map(({aiDraft,...r})=>user.role==='teacher'?{...r,aiDraft}:r);
+  return {group:owner,history,records:growth.rows(userId,user.role),...(user.role==='teacher'?{events:growth.events(userId)}:{})};
+ }
+ const gr=path.match(/^\/api\/growth\/(\d+)(?:\/(retry))?$/);
+ if(gr&&(method==='PATCH'||method==='POST')){
+  teacher(user);const row=db.prepare('SELECT user_id FROM growth_records WHERE id=?').get(Number(gr[1]));if(!row)fail(404,'성장 기록을 찾을 수 없습니다.');
+  if(gr[2]==='retry'&&method==='POST'){if(!growth.retry(Number(gr[1]),row.user_id))fail(404,'성장 기록을 찾을 수 없습니다.');return {ok:true};}
+  if(!gr[2]&&method==='PATCH'){const result=growth.review(Number(gr[1]),row.user_id,user.id,await body(req,512*1024));if(result.error)fail(result.error,result.message);return result;}
+ }
  if(path==='/api/password'&&method==='POST'){
   const b=await body(req);if(hashPassword(text(b.currentPassword,1,128),user.salt)!==user.hash)fail(400,'현재 비밀번호를 확인해 주세요.');const salt=randomBytes(16).toString('hex');db.prepare('UPDATE users SET hash=?,salt=? WHERE id=?').run(hashPassword(password(b.password),salt),salt,user.id);db.prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').run(user.id,tokenHash);return {ok:true};
  }
@@ -179,7 +205,7 @@ async function api(req,res,url){
   if(user.role!=='student')fail(403,'학생 모둠 계정으로 의뢰해 주세요.');const b=await body(req);if(!types[b.type])fail(400,'컨설팅 종류를 선택해 주세요.');const activity=b.activity||b.answers?.activity;
   if(activity&&(!activities[activity]||activities[activity].type!==b.type))fail(400,'분야에 맞는 세부 활동을 선택해 주세요.');
   const title=activity?activities[activity].name:text(b.title,2,100),answers={};
-  if(activity){answers.activity=activity;for(const field of ['q1','q2','q3'])answers[field]=text(b.answers?.[field],1,2000);}
+  if(activity){answers.activity=activity;for(const field of ['q1','q2','q3']){text(b.answers?.[field],1,2000);if(b.answers[field].length>2000)fail(400,'답변은 2,000자 이내로 적어 주세요.');answers[field]=b.answers[field];}}
   else for(const field of types[b.type].fields)answers[field]=text(b.answers?.[field],2,2000);
   if(activity==='D1'&&!b.parentId)fail(400,'수정할 이전 컨설팅 결과를 선택해 주세요.');
   if(activity&&activity!=='D1'&&b.parentId)fail(400,'이전 결과 수정 활동을 선택해 주세요.');
@@ -189,7 +215,7 @@ async function api(req,res,url){
    if(b.parentId){const p=db.prepare('SELECT * FROM requests WHERE id=? AND user_id=?').get(integer(b.parentId,1,Number.MAX_SAFE_INTEGER),user.id);if(!p||p.status!=='released')fail(400,'전달받은 결과에만 추가 요청할 수 있습니다.');}
    db.prepare('UPDATE users SET balance=balance-1 WHERE id=?').run(user.id);const id=Number(db.prepare('INSERT INTO requests(user_id,parent_id,type,title,answers,created_at) VALUES(?,?,?,?,?,?)').run(user.id,b.parentId||null,b.type,title,JSON.stringify(answers),now()).lastInsertRowid);
    db.prepare('INSERT INTO ledger(user_id,delta,reason,actor_id,created_at) VALUES(?,-1,?,?,?)').run(user.id,`의뢰 #${id} 제출`,user.id,now());return id;
-  });return {id};
+  });recordSnapshot(id,'submitted');growth.queue(user.id,id);return {id};
  }
  const im=path.match(/^\/api\/requests\/(\d+)\/images\/(\d+)$/);
  if(im){
@@ -214,7 +240,7 @@ async function api(req,res,url){
   teacher(user);const id=Number(rm[1]);const r=db.prepare('SELECT * FROM requests WHERE id=?').get(id);if(!r)fail(404,'의뢰서를 찾을 수 없습니다.');if(r.status==='released')fail(409,'이미 전송한 결과는 변경할 수 없습니다.');
   if(rm[2]==='generate'){
    if(generating.has(id))fail(409,'후보를 작성하고 있습니다.');generating.add(id);
-   try{const {result,source}=await generate(r);const updated=db.prepare("UPDATE requests SET candidates=?,assessment=?,source=?,status='review' WHERE id=? AND status!='released'").run(JSON.stringify(result.candidates),JSON.stringify(result.assessment),source,id);if(!updated.changes)fail(409,'이미 전송된 결과입니다.');db.prepare('DELETE FROM images WHERE request_id=?').run(id);
+   try{const {result,source}=await generate(r);const updated=db.prepare("UPDATE requests SET candidates=?,assessment=?,source=?,status='review' WHERE id=? AND status!='released'").run(JSON.stringify(result.candidates),JSON.stringify(result.assessment),source,id);if(!updated.changes)fail(409,'이미 전송된 결과입니다.');db.prepare('DELETE FROM images WHERE request_id=?').run(id);recordSnapshot(id,'ai_draft');growth.queue(r.user_id,id);
     if(source==='ai'&&JSON.parse(r.answers).activity&&outputType(r)==='design'){
      try{for(const c of result.candidates)await generateImage(r,c);}catch(e){console.error('Image generation failed:',e.name);fail(502,'설명 후보는 저장했지만 이미지 생성에 실패했습니다. API 권한을 확인한 뒤 각 후보에서 이미지 생성을 다시 실행하거나 직접 첨부해 주세요.');}
     }
@@ -239,13 +265,13 @@ async function api(req,res,url){
    }
    if(bytes){const folder=join(dirname(dbPath),'images');mkdirSync(folder,{recursive:true});const file=join(folder,`${id}-4-${randomBytes(8).toString('hex')}.${ext}`);writeFileSync(file,bytes);db.prepare('INSERT OR REPLACE INTO images VALUES(?,?,?)').run(id,4,file);}
    db.prepare("UPDATE requests SET candidates=?,assessment=NULL,selected='[4]',source='teacher',teacher_note=?,status='released',released_at=? WHERE id=?").run(JSON.stringify([...JSON.parse(r.candidates||'[]').filter(c=>c.id!==4),c]),note,now(),id);
-   return {ok:true};
+   recordSnapshot(id,'teacher_final');growth.queue(r.user_id,id);return {ok:true};
   }
   if(r.status!=='review')fail(400,'먼저 후보를 작성해 주세요.');
   if(!Array.isArray(b.selected)||b.selected.length<1||b.selected.length>3||new Set(b.selected).size!==b.selected.length||b.selected.some(x=>![1,2,3].includes(x)))fail(400,'전송할 후보를 1개 이상 선택해 주세요.');if(b.reviewConfirmed!==true)fail(400,'전송 전 검토 확인이 필요합니다.');
   if(r.source==='ai'&&JSON.parse(r.answers).activity&&outputType(r)==='design'&&b.selected.some(candidate=>!db.prepare('SELECT path FROM images WHERE request_id=? AND candidate_id=?').get(id,candidate)))fail(400,'선택한 디자인의 이미지를 먼저 생성하거나 직접 작성·첨부해 주세요.');
   const candidates=b.candidates?validateResult({candidates:b.candidates,assessment:b.assessment||JSON.parse(r.assessment)}):{candidates:JSON.parse(r.candidates),assessment:JSON.parse(r.assessment)};
-  db.prepare("UPDATE requests SET candidates=?,assessment=?,selected=?,teacher_note=?,status='released',released_at=? WHERE id=?").run(JSON.stringify(candidates.candidates),JSON.stringify(candidates.assessment),JSON.stringify(b.selected),text(b.teacherNote||'선생님이 검토한 결과입니다.',1,3000),now(),id);return {ok:true};
+  db.prepare("UPDATE requests SET candidates=?,assessment=?,selected=?,teacher_note=?,status='released',released_at=? WHERE id=?").run(JSON.stringify(candidates.candidates),JSON.stringify(candidates.assessment),JSON.stringify(b.selected),text(b.teacherNote||'선생님이 검토한 결과입니다.',1,3000),now(),id);recordSnapshot(id,'teacher_final');growth.queue(r.user_id,id);return {ok:true};
  }
  fail(404,'요청한 기능을 찾을 수 없습니다.');
 }
@@ -254,9 +280,9 @@ const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
  try{
   if(url.pathname.startsWith('/api/')){res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');const data=await api(req,res,url);if(data?.binary){res.setHeader('Content-Type',data.mime);res.end(data.binary);}else res.end(JSON.stringify(data));return;}
-  if(req.method!=='GET'&&req.method!=='HEAD')fail(405,'지원하지 않는 요청입니다.');const files={'/':'index.html','/activities.js':'activities.js','/app.js':'app.js','/styles.css':'styles.css'};const file=files[url.pathname];if(!file)fail(404,'페이지를 찾을 수 없습니다.');res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript; charset=utf-8':file.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');res.end(readFileSync(join(root,'public',file)));
+  if(req.method!=='GET'&&req.method!=='HEAD')fail(405,'지원하지 않는 요청입니다.');const files={'/':'index.html','/activities.js':'activities.js','/growth-policy.js':'growth-policy.js','/assets/jeju-robot.png':'assets/jeju-robot.png','/assets/jiwon-logo.png':'assets/jiwon-logo.png','/app.js':'app.js','/styles.css':'styles.css'};const file=files[url.pathname];if(!file)fail(404,'페이지를 찾을 수 없습니다.');res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript; charset=utf-8':file.endsWith('.css')?'text/css; charset=utf-8':file.endsWith('.png')?'image/png':file.endsWith('.svg')?'image/svg+xml':'text/html; charset=utf-8');res.end(readFileSync(join(root,'public',file)));
  }catch(e){res.statusCode=e.status||500;res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify({error:e.status?e.message:'서버에서 오류가 발생했습니다.'}));if(!e.status)console.error(e.name,e.code||'');}
 });
 server.listen(Number(process.env.PORT||3000),process.env.HOST||'0.0.0.0',()=>console.log(`Jeju startup app listening on port ${server.address().port}`));
-function shutdown(){server.close(()=>{db.close();process.exit(0);});}
+function shutdown(){growth.close();server.close(()=>{db.close();process.exit(0);});}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);

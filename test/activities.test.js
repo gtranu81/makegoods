@@ -51,7 +51,7 @@ test('seven initial activities send only the three answers and correct activity 
   assert.equal((await call(`/requests/${id}/generate`,'POST',{})).status,200);
   const row=(await call('/requests')).data.requests.find(r=>r.id===id);assert.equal(row.answers.activity,code);assert.equal(row.candidates.length,3);
   assert.equal((await call('/requests','GET',null,student)).data.requests.find(r=>r.id===id).candidates,undefined);
-  const message=logs().filter(x=>x.url.endsWith('/chat/completions')).at(-1).payload.messages;
+  const message=logs().filter(x=>x.url.endsWith('/chat/completions')&&x.purpose!=='growth_analysis').at(-1).payload.messages;
   const context=JSON.parse(message[1].content);assert.equal(context.activityCode,code);assert.deepEqual(context.requiredOutputs,activities[code].outputs);assert.deepEqual(context.answers.map(x=>x.answer),Object.values(payload(code).answers));assert.equal(context.previousResult,null);
   assert.match(message[0].content,/확인된 사실/);assert.match(message[0].content,/초등학교 4학년/);assert.match(message[0].content,/미입력 조건은 확정하지/);
   if(code==='C1'){
@@ -69,7 +69,7 @@ test('D1 uses only owned, released results and edits the previous image; repeate
  for(let i=0;i<2;i++){
   const created=await call('/requests','POST',payload('D1',{parentId}),student);assert.equal(created.status,200);const id=created.data.id;
   assert.equal((await call(`/requests/${id}/generate`,'POST',{})).status,200);
-  const context=JSON.parse(logs().filter(x=>x.url.endsWith('/chat/completions')).at(-1).payload.messages[1].content);
+  const context=JSON.parse(logs().filter(x=>x.url.endsWith('/chat/completions')&&x.purpose!=='growth_analysis').at(-1).payload.messages[1].content);
   assert.equal(context.previousResult.id,parentId);assert.deepEqual(context.previousResult.candidates.map(c=>c.id),[1]);assert.equal(context.outputType,'design');assert.equal(context.answers[2].answer,payload('D1').answers.q3);
   const edits=logs().filter(x=>x.url.endsWith('/images/edits'));assert.equal(edits.length,(i+1)*3);assert.ok(edits.at(-1).payload.image.size>0);
   const row=(await call('/requests')).data.requests.find(r=>r.id===id);assert.equal(row.outputType,'design');assert.ok(row.candidates.every(c=>c.imageUrl));
@@ -81,7 +81,7 @@ test('text result revisions preserve the original consulting kind and never requ
  const imagesBefore=logs().filter(x=>x.url.includes('/images/')).length;
  const id=(await call('/requests','POST',payload('D1',{parentId:parent.id}),student)).data.id;
  assert.equal((await call(`/requests/${id}/generate`,'POST',{})).status,200);
- const context=JSON.parse(logs().filter(x=>x.url.endsWith('/chat/completions')).at(-1).payload.messages[1].content);
+ const context=JSON.parse(logs().filter(x=>x.url.endsWith('/chat/completions')&&x.purpose!=='growth_analysis').at(-1).payload.messages[1].content);
  assert.equal(context.outputType,'market');assert.equal(context.previousResult.activity,'B2');assert.equal(logs().filter(x=>x.url.includes('/images/')).length,imagesBefore);
  assert.equal((await call(`/requests/${id}/release`,'POST',{selected:[1],reviewConfirmed:true})).status,200);
 });

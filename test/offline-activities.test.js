@@ -7,7 +7,7 @@ test('offline demo accepts all eight activities, preserves revisions, validates 
  const saved=new Map();
  const create=()=>{
   const context=vm.createContext({Response,structuredClone,atob,console,localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value)}});context.window=context;
-  for(const path of ['../public/activities.js','../demo/runtime.js'])vm.runInContext(readFileSync(new URL(path,import.meta.url),'utf8'),context);
+  for(const path of ['../public/activities.js','../public/growth-policy.js','../demo/runtime.js'])vm.runInContext(readFileSync(new URL(path,import.meta.url),'utf8'),context);
   return context;
  };
  let context=create();
@@ -28,6 +28,10 @@ test('offline demo accepts all eight activities, preserves revisions, validates 
  const before=(await call('/me')).data.user.balance;
  assert.equal((await call('/requests','POST',{type:'revision',activity:'D1',answers:{q1:'색',q2:'밝게',q3:'가방'},safetyConfirmed:true})).status,400);
  assert.equal((await call('/me')).data.user.balance,before);
- context=create();await context.jejuDemoLogin('student');const records=(await call('/requests')).data.requests;
+ const hidden=(await call('/growth')).data;assert.ok(hidden.records.every(r=>r.report===null));assert.equal(hidden.events,undefined);
+ await context.jejuDemoLogin('teacher');const growth=(await call('/growth?userId=2')).data;const summary=growth.records.find(r=>r.kind==='summary');assert.equal(summary.source,'observation');assert.ok(growth.events.some(e=>e.kind==='ai_draft'));assert.ok(growth.events.some(e=>e.kind==='teacher_final'));
+ assert.equal((await call('/growth/'+summary.id,'PATCH',{version:summary.version,report:{changes:'교사가 확인한 모둠의 변화'},approve:true,reviewConfirmed:true})).status,200);
+ context=create();await context.jejuDemoLogin('student');const visible=(await call('/growth')).data.records.find(r=>r.kind==='summary');assert.equal(visible.report.changes,'교사가 확인한 모둠의 변화');assert.equal(visible.report.teacherNarrative,undefined);
+ const records=(await call('/requests')).data.requests;
  assert.equal(records.length,8);assert.ok(records.every(r=>r.candidates.length===1));assert.equal(records.find(r=>r.answers.activity==='D1').outputType,'design');
 });
