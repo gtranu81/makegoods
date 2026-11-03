@@ -10,7 +10,7 @@
     "start": "node --use-env-proxy server.js",
     "dev": "node --use-env-proxy --watch server.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check server.js && node --check public/app.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/activities.js && node --check demo/runtime.js",
     "demo:build": "node scripts/build-demo.js"
   }
 }

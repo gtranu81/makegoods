@@ -12,7 +12,8 @@
  const requireTeacher=()=>{if(current?.role!=='teacher')error(403,'선생님 체험으로 전환해 주세요.');};
  const addLedger=(id,delta,reason)=>data.ledger.unshift({id:data.ledger.length+1,user_id:id,name:data.users.find(u=>u.id===id)?.name,delta,reason,created_at:timestamp()});
  function refresh(){data.users.forEach(u=>{if(u.role==='student'&&u.periodLimit===null&&u.coinDay!==today()){addLedger(u.id,u.dailyLimit-u.balance,'하루 코인 초기화');u.balance=u.dailyLimit;u.coinDay=today();}});}
- function view(r){const copy=structuredClone(r);if(current.role!=='teacher'){if(r.status!=='released'){delete copy.candidates;delete copy.assessment;delete copy.teacherNote;delete copy.source;}else copy.candidates=copy.candidates.filter(c=>copy.selected.includes(c.id));delete copy.selected;}return copy;}
+ function outputType(r){const seen=new Set();while(r?.type==='revision'&&r.parentId&&!seen.has(r.id)){seen.add(r.id);r=data.requests.find(p=>p.id===r.parentId);}return r?.type||'revision';}
+ function view(r){const copy=structuredClone(r);copy.outputType=outputType(r);if(current.role!=='teacher'){if(r.status!=='released'){delete copy.candidates;delete copy.assessment;delete copy.teacherNote;delete copy.source;}else copy.candidates=copy.candidates.filter(c=>copy.selected.includes(c.id));delete copy.selected;}return copy;}
  window.fetch=async(input,options={})=>{
   try{
    const path=String(input).replace(/^\/api/,'');const method=options.method||'GET',b=JSON.parse(options.body||'{}');refresh();let out;
@@ -47,17 +48,28 @@
     else if(path==='/requests'&&method==='POST'){
      if(current.role!=='student')error(403,'학생 체험에서 의뢰해 주세요.');if(current.balance<1)error(400,'코인이 부족해요. 교사 체험에서 코인을 추가해 주세요.');
      if(!b.safetyConfirmed)error(400,'안전 확인이 필요합니다.');
-     if(!['idea','market','design','revision','marketing'].includes(b.type)||!b.title?.trim()||['goods','country','audience','purpose','details','format'].some(k=>!b.answers?.[k]?.trim()))error(400,'모든 내용을 적어 주세요.');
+     const code=b.activity||b.answers?.activity,activity=globalThis.consultingActivities[code];
+     if(code){
+      if(!activity||activity.type!==b.type)error(400,'분야에 맞는 세부 활동을 선택해 주세요.');
+      if(['q1','q2','q3'].some(k=>typeof b.answers?.[k]!=='string'||!b.answers[k].trim()||b.answers[k].length>2000))error(400,'세 가지 질문에 생각을 적어 주세요.');
+      if(code==='D1'&&!b.parentId)error(400,'수정할 이전 결과를 선택해 주세요.');
+      if(code!=='D1'&&b.parentId)error(400,'이전 결과 수정 활동을 선택해 주세요.');
+      b.title=activity.name;b.answers={activity:code,...Object.fromEntries(['q1','q2','q3'].map(k=>[k,b.answers[k].trim()]))};
+     }else if(!['idea','market','design','revision','marketing'].includes(b.type)||!b.title?.trim()||['goods','country','audience','purpose','details','format'].some(k=>!b.answers?.[k]?.trim()))error(400,'모든 내용을 적어 주세요.');
      if(b.parentId&&!data.requests.some(r=>r.id===b.parentId&&r.userId===current.id&&r.status==='released'))error(400,'전달된 결과에 추가 요청해 주세요.');
      const r={id:Math.max(0,...data.requests.map(r=>r.id))+1,userId:current.id,groupName:current.name,parentId:b.parentId||null,type:b.type,title:b.title,answers:b.answers,status:'pending',createdAt:timestamp(),releasedAt:null};data.requests.unshift(r);current.balance--;addLedger(current.id,-1,`의뢰 #${r.id} 제출`);out={id:r.id};
     }else{
      const match=path.match(/^\/requests\/(\d+)\/(generate|release)$/);if(!match)error(404,'오프라인 체험에서 지원하지 않는 기능입니다.');requireTeacher();const r=data.requests.find(r=>r.id===Number(match[1]));if(!r)error(404,'의뢰서를 찾을 수 없습니다.');if(r.status==='released')error(409,'이미 전송했습니다.');
-     if(match[2]==='generate'){
+     if(match[2]==='generate'&&r.answers.activity){
+      const previous=data.requests.find(p=>p.id===r.parentId);
+      const visible=previous?{...previous,outputType:outputType(previous),candidates:previous.candidates.filter(c=>previous.selected.includes(c.id))}:null;
+      Object.assign(r,globalThis.activityDemo(r.answers.activity,r.answers,visible),{source:'demo',status:'review'});out={ok:true,source:'demo'};
+     }else if(match[2]==='generate'){
       const a=r.answers;const kinds={idea:['제주의 이야기를 담아요','쓰임새를 더해요','작은 세트로 시작해요'],market:['생활과 문화를 알아봐요','기후와 사용 장면을 살펴봐요','소비자에게 직접 물어봐요'],design:['바다를 닮은 디자인','현무암의 질감을 담은 디자인','제주 이야기가 있는 포장'],revision:['핵심 매력을 남겨요','사용하기 편하게 바꿔요','친구들의 의견을 반영해요'],marketing:['짧은 문구로 마음을 전해요','상품의 사용 장면을 보여줘요','제주의 이야기를 들려줘요']};
       r.candidates=kinds[r.type].map((title,i)=>({id:i+1,title,summary:`${a.goods}를 ${a.country}의 ${a.audience}에게 소개하는 체험용 예시입니다.`,content:`1. 아이디어의 출발점\n${a.purpose}\n\n2. 함께 해 볼 일\n${['제주의 자연·문화 요소 중 하나를 정하고, 굿즈와 연결되는 이야기를 직접 써 보세요. 재료와 크기도 구체적으로 정해 보세요.','누가 언제 어디에서 사용할지 그려 보세요. 친구 3명에게 의견을 묻고 개선할 점을 기록해 보세요.','상품 이름, 포장 방법, 짧은 소개 문구를 만들어 보세요. 기존 캐릭터나 상표를 그대로 사용하지 않아요.'][i]}\n\n3. 다음 단계\n${a.country}의 모든 사람이 같은 취향이라고 생각하지 않아요. 실제 자료와 사용자 의견으로 확인해 보세요.\n\n※ AI가 생성한 분석이 아닌, 오프라인 체험용 예시입니다. 실제 가격·시장·규정은 확인하지 않았습니다.${r.type==='design'?'\n디자인 설명 예시: 바다의 파랑, 현무암의 회색, 직접 만든 단순한 문양을 조합해 보세요. 실제 이미지 파일은 이 오프라인 체험판에서 생성되지 않습니다.':''}`}));
       r.assessment={score:Math.min(20,8+Math.floor(a.details.length/30)),strengths:['굿즈와 수출 대상국을 정했어요.','원하는 결과 형식을 설명했어요.'],improvements:['색상·크기·재료·분량 같은 조건을 더 구체적으로 적어 보세요.','확인된 사실과 더 조사해야 할 내용을 구분해 보세요.'],safety:'체험용 평가 예시입니다. 실제 학생 평가로 사용하지 마세요. 개인정보·저작권·문화 표현과 사실 확인이 필요합니다.'};r.source='demo';r.status='review';out={ok:true,source:'demo'};
      }else if(b.manual){
-      if(r.type!=='design'||!b.reviewConfirmed)error(400,'디자인 내용과 검토 확인을 확인해 주세요.');
+      if(outputType(r)!=='design'||!b.reviewConfirmed)error(400,'디자인 내용과 검토 확인을 확인해 주세요.');
       for(const [key,max] of [['title',100],['summary',500],['content',7000]])if(typeof b.manual[key]!=='string'||!b.manual[key].trim()||b.manual[key].length>max)error(400,'제목·요약·내용을 길이 제한에 맞게 입력해 주세요.');
       if(b.manual.image&&(!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(b.manual.image)||atob(b.manual.image.split(',')[1]).length>5*1024*1024))error(400,'이미지 형식과 크기를 확인해 주세요.');
       Object.assign(r,{candidates:[{id:4,title:b.manual.title,summary:b.manual.summary,content:b.manual.content,imageUrl:b.manual.image||null}],assessment:null,source:'teacher',selected:[4],teacherNote:b.teacherNote||'선생님이 직접 작성한 디자인입니다.',status:'released',releasedAt:timestamp()});out={ok:true};
