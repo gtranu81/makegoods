@@ -10,7 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 const dir=mkdtempSync(join(tmpdir(),'jeju-test-'));
 let child,base,cookieTeacher,cookieStudent,cookieOther,studentId,requestId;
 async function start(){
- child=spawn(process.execPath,['--use-env-proxy','server.js'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:'0',HOST:'127.0.0.1',DB_PATH:join(dir,'test.sqlite'),AI_API_KEY:'',NODE_ENV:'test',SETUP_TOKEN:''},stdio:['ignore','pipe','pipe']});
+ child=spawn(process.execPath,['--use-env-proxy','server.js'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:'0',HOST:'127.0.0.1',DB_PATH:join(dir,'test.sqlite'),AI_API_KEY:'',NODE_ENV:'test',SETUP_TOKEN:'',APP_ORIGIN:'',RENDER_EXTERNAL_URL:'https://jeju-test.onrender.com'},stdio:['ignore','pipe','pipe']});
  const port=await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Startup timed out')),10000);child.stdout.on('data',chunk=>{const m=chunk.toString().match(/port (\d+)/);if(m){clearTimeout(timeout);resolve(m[1]);}});child.on('error',reject);});base=`http://127.0.0.1:${port}`;
 }
 async function stop(){child.kill('SIGTERM');await once(child,'exit');}
@@ -23,7 +23,7 @@ test('first teacher setup, secure login, and student creation',async()=>{
  assert.equal((await call('/bootstrap','POST',{name:'제주 선생님',username:'teacher',password:'teacher-strong-pass'})).status,200);
  assert.equal((await call('/bootstrap','POST',{name:'다른 교사',username:'another',password:'teacher-strong-pass'})).status,409);
  assert.equal((await call('/login','POST',{username:'teacher',password:'wrong'})).status,401);
- const login=await call('/login','POST',{username:'teacher',password:'teacher-strong-pass'});cookieTeacher=login.cookie;assert.match(cookieTeacher,/^session=/);
+ const login=await call('/login','POST',{username:'teacher',password:'teacher-strong-pass'},null,{Origin:'https://jeju-test.onrender.com'});assert.equal(login.status,200);cookieTeacher=login.cookie;assert.match(cookieTeacher,/^session=/);
  for(const [username,name] of [['group01','바다 1모둠'],['group02','오름 2모둠']]){const r=await call('/users','POST',{username,name,password:'student-strong-pass'},cookieTeacher);assert.equal(r.status,200);if(username==='group01')studentId=r.data.id;}
  cookieStudent=(await call('/login','POST',{username:'group01',password:'student-strong-pass'})).cookie;
  cookieOther=(await call('/login','POST',{username:'group02',password:'student-strong-pass'})).cookie;

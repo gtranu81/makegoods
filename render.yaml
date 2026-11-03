@@ -1,0 +1,29 @@
+# Render Blueprint: a single Node server with persistent SQLite/image storage.
+# The Starter service and persistent disk incur hosting charges.
+services:
+  - type: web
+    name: jeju-startup
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.1
+      - key: NODE_ENV
+        value: production
+      - key: DB_PATH
+        value: /data/app.sqlite
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: gpt-4.1-mini
+      - key: AI_IMAGE_MODEL
+        value: gpt-image-1.5
+      - key: SETUP_TOKEN
+        generateValue: true
+    disk:
+      name: jeju-startup-data
+      mountPath: /data
+      sizeGB: 1
