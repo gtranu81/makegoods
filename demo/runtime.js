@@ -59,7 +59,7 @@
      }else if(b.manual){
       if(r.type!=='design'||!b.reviewConfirmed)error(400,'디자인 내용과 검토 확인을 확인해 주세요.');
       for(const [key,max] of [['title',100],['summary',500],['content',7000]])if(typeof b.manual[key]!=='string'||!b.manual[key].trim()||b.manual[key].length>max)error(400,'제목·요약·내용을 길이 제한에 맞게 입력해 주세요.');
-      if(b.manual.image&&(!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(b.manual.image)||b.manual.image.length>2800000))error(400,'이미지 형식과 크기를 확인해 주세요.');
+      if(b.manual.image&&(!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(b.manual.image)||atob(b.manual.image.split(',')[1]).length>5*1024*1024))error(400,'이미지 형식과 크기를 확인해 주세요.');
       Object.assign(r,{candidates:[{id:4,title:b.manual.title,summary:b.manual.summary,content:b.manual.content,imageUrl:b.manual.image||null}],assessment:null,source:'teacher',selected:[4],teacherNote:b.teacherNote||'선생님이 직접 작성한 디자인입니다.',status:'released',releasedAt:timestamp()});out={ok:true};
      }else{
       if(r.status!=='review'||!b.reviewConfirmed||!Array.isArray(b.selected)||!b.selected.length||b.selected.some(x=>![1,2,3].includes(x)))error(400,'후보를 선택하고 검토 확인을 해 주세요.');

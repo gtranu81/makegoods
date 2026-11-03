@@ -170,7 +170,7 @@ async function api(req,res,url){
    if(generating.has(id))fail(409,'후보를 작성하고 있습니다.');generating.add(id);
    try{const {result,source}=await generate(r);const updated=db.prepare("UPDATE requests SET candidates=?,assessment=?,source=?,status='review' WHERE id=? AND status!='released'").run(JSON.stringify(result.candidates),JSON.stringify(result.assessment),source,id);if(!updated.changes)fail(409,'이미 전송된 결과입니다.');db.prepare('DELETE FROM images WHERE request_id=?').run(id);return {ok:true,source};}catch(e){if(e.status)throw e;console.error('Generation failed:',e.name);fail(502,'AI 후보 작성에 실패했습니다. 연결 및 API 설정을 확인한 뒤 다시 시도해 주세요. 코인은 추가로 차감되지 않습니다.');}finally{generating.delete(id);}
   }
-  if(generating.has(id))fail(409,'후보 작성이 끝난 후 전송해 주세요.');const b=await body(req,3*1024*1024);
+  if(generating.has(id))fail(409,'후보 작성이 끝난 후 전송해 주세요.');const b=await body(req,8*1024*1024);
   if(db.prepare('SELECT status FROM requests WHERE id=?').get(id).status==='released')fail(409,'이미 전송한 결과는 변경할 수 없습니다.');
   if(generating.has(id))fail(409,'후보 작성이 끝난 후 전송해 주세요.');
   if(b.manual){
@@ -183,7 +183,7 @@ async function api(req,res,url){
     const match=typeof b.manual.image==='string'&&b.manual.image.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
     if(!match)fail(400,'PNG, JPEG, WebP 이미지만 첨부할 수 있습니다.');
     bytes=Buffer.from(match[2],'base64');ext=match[1]==='jpeg'?'jpg':match[1];
-    if(bytes.length>2*1024*1024)fail(413,'이미지는 2MB 이하로 첨부해 주세요.');
+    if(bytes.length>5*1024*1024)fail(413,'이미지는 5MB 이하로 첨부해 주세요.');
     const valid=ext==='png'?bytes.subarray(0,8).toString('hex')==='89504e470d0a1a0a':ext==='jpg'?bytes.subarray(0,3).toString('hex')==='ffd8ff':bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP';
     if(!valid)fail(400,'올바른 이미지 파일을 첨부해 주세요.');
    }
