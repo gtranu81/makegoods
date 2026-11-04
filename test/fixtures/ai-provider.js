@@ -7,6 +7,8 @@ globalThis.fetch=async(url,options)=>{
  const payload=multipart?Object.fromEntries([...options.body].map(([key,value])=>[key,typeof value==='string'?value:{size:value.size,type:value.type}])):JSON.parse(options.body);
  const context=String(url).includes('/chat/')?JSON.parse(payload.messages[1].content):null;
  appendFileSync(process.env.TEST_AI_LOG,JSON.stringify({url,payload,purpose:context?.purpose})+'\n');
+ let control;try{if(existsSync(process.env.TEST_AI_FAIL))control=JSON.parse(readFileSync(process.env.TEST_AI_FAIL,'utf8'));}catch{}
+ if(control?.stage==='text'&&context&&context.purpose!=='growth_analysis')return Response.json({error:{code:control.code,message:control.message}},{status:control.status});
  if(String(url).includes('/images/'))return existsSync(process.env.TEST_AI_FAIL)?new Response('{}',{status:503}):Response.json({data:[{b64_json:png}]});
  if(context?.purpose==='growth_analysis'){
   const bad=process.env.TEST_GROWTH_BAD&&existsSync(process.env.TEST_GROWTH_BAD)?readFileSync(process.env.TEST_GROWTH_BAD,'utf8'):null;

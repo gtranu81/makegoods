@@ -94,3 +94,11 @@ test('image failures keep reviewable text, block image-less AI releases, and all
  rmSync(failure);assert.equal((await call(`/requests/${id}/images/1`,'POST',{})).status,200);
  assert.equal((await call(`/requests/${id}/release`,'POST',{selected:[1],reviewConfirmed:true})).status,200);
 });
+
+test('failed text API calls return the cause and action without leaking provider credentials',async()=>{
+ writeFileSync(failure,JSON.stringify({stage:'text',status:401,code:'invalid_api_key',message:'Private key test-secret-123 and private student input'}));
+ try{
+  const id=(await call('/requests','POST',payload('A1'),student)).data.id;
+  const result=await call(`/requests/${id}/generate`,'POST',{});assert.equal(result.status,502);assert.match(result.data.error,/AI_API_KEY/);assert.match(result.data.error,/HTTP 401/);assert.ok(!result.data.error.includes('test-secret-123'));assert.ok(!result.data.error.includes('private student input'));
+ }finally{rmSync(failure);}
+});

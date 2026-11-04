@@ -1,4 +1,5 @@
 import './public/growth-policy.js';
+import {providerError,aiDiagnostic,AiServiceError} from './ai-errors.js';
 import {createHash} from 'node:crypto';
 const policy=globalThis.growthPolicy;
 const stamp=()=>new Date().toISOString();
@@ -71,7 +72,7 @@ export function createGrowthStore(db){
   if(!process.env.AI_API_KEY)return {report:ctx.kind==='summary'?policy.summaryObservation(ctx.history):policy.observation(ctx.current,ctx.history),source:'observation'};
   const shape=ctx.kind==='summary'?{initial:'초기 의뢰 특징',changes:'주요 변화',strongest:'실제로 확인된 가장 뚜렷한 변화 또는 판단 유보',examples:[{before:{requestId:1,field:'q1',quote:'이전 원문 그대로'},after:{requestId:2,field:'q1',quote:'현재 원문 그대로'},description:'사례에 근거한 변화 설명'}],next:'성장 방향 한 가지',teacherNarrative:'전체 이력에 근거한 교사용 종합 성장 서술'}:{before:'처음에는',now:'이번에는',growth:'이렇게 성장했어요 (성장이 확인될 때만)',resultChange:'컨설팅 결과의 변화 또는 확인 불가',next:'구체적인 조언 한 가지',teacherNarrative:'실제 사례에 근거한 교사용 성장 서술',teacherGuidance:'다음 의뢰 지도 사항',areas:ctx.comparison.areas.map(a=>({key:a.key,finding:'해당 영역의 정보 충분성·적절성·명확성·구체성 관찰',evidence:[{requestId:ctx.current.id,field:'q1',quote:'실제 답변 그대로'},...(a.comparable?[{requestId:ctx.comparison.previous.id,field:'q1',quote:'이전 답변 그대로'}]:[])]})),resultEvidence:[]};
   const response=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${process.env.AI_API_KEY}`},signal:AbortSignal.timeout(60000),body:encode({model:process.env.AI_MODEL||'gpt-4.1-mini',messages:[{role:'system',content:prompt+' 형식: '+encode(shape)},{role:'user',content:encode({...ctx,purpose:'growth_analysis',questions:ctx.history.map(r=>({requestId:r.id,fields:policy.fields(r)}))})}],response_format:{type:'json_object'},max_completion_tokens:6000})});
-  if(!response.ok)throw Error('성장 분석 API 연결 또는 모델 권한을 확인해 주세요.');
+  if(!response.ok)throw await providerError(response,{stage:'growth',model:process.env.AI_MODEL||'gpt-4.1-mini'});
   const data=await response.json();return {report:validate(JSON.parse(data.choices[0].message.content),ctx),source:'ai'};
  }
  async function work(){
@@ -86,7 +87,7 @@ export function createGrowthStore(db){
      if(latest.fingerprint!==fingerprint||signature(context(latest))!==fingerprint){db.prepare("UPDATE growth_records SET status='pending' WHERE id=?").run(row.id);continue;}
      db.prepare("UPDATE growth_records SET draft=?,source=?,status='review',generated_at=?,error=NULL WHERE id=?").run(encode(report),source,stamp(),row.id);
      db.prepare("INSERT INTO growth_revisions(record_id,action,data,created_at) VALUES(?,'generated',?,?)").run(row.id,encode(report),stamp());
-    }catch(e){if(closed)return;const latest=db.prepare('SELECT fingerprint FROM growth_records WHERE id=?').get(row.id);if(latest.fingerprint!==fingerprint)continue;db.prepare("UPDATE growth_records SET status='error',error=? WHERE id=?").run(e.message?.startsWith('성장 분석 API')?e.message:'성장 분석의 근거 인용이나 형식을 확인하지 못했습니다. 다시 분석하거나 원문을 보고 교사가 작성해 주세요.',row.id);}
+    }catch(e){if(closed)return;const latest=db.prepare('SELECT fingerprint FROM growth_records WHERE id=?').get(row.id);if(latest.fingerprint!==fingerprint)continue;db.prepare("UPDATE growth_records SET status='error',error=? WHERE id=?").run(e instanceof AiServiceError?aiDiagnostic(e,{stage:'growth'}).message:'성장 분석의 근거 인용이나 형식을 확인하지 못했습니다. 다시 분석하거나 원문을 보고 교사가 작성해 주세요.',row.id);}
    }
   }finally{busy=false;}
  }
