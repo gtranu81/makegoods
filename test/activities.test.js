@@ -52,6 +52,7 @@ test('seven initial activities send only the three answers and correct activity 
   const row=(await call('/requests')).data.requests.find(r=>r.id===id);assert.equal(row.answers.activity,code);assert.equal(row.candidates.length,3);
   assert.equal((await call('/requests','GET',null,student)).data.requests.find(r=>r.id===id).candidates,undefined);
   const message=logs().filter(x=>x.url.endsWith('/chat/completions')&&x.purpose!=='growth_analysis').at(-1).payload.messages;
+  const request=logs().filter(x=>x.url.endsWith('/chat/completions')&&x.purpose!=='growth_analysis').at(-1).payload;assert.equal(request.response_format.type,'json_schema');assert.equal(request.response_format.json_schema.strict,true);
   const context=JSON.parse(message[1].content);assert.equal(context.activityCode,code);assert.deepEqual(context.requiredOutputs,activities[code].outputs);assert.deepEqual(context.answers.map(x=>x.answer),Object.values(payload(code).answers));assert.equal(context.previousResult,null);
   assert.match(message[0].content,/확인된 사실/);assert.match(message[0].content,/초등학교 4학년/);assert.match(message[0].content,/미입력 조건은 확정하지/);
   if(code==='C1'){

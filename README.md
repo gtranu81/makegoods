@@ -184,3 +184,5 @@ npm test
 - 응답 잘림·형식 오류: API 접속 실패와 구분해 표시합니다. 재시도하거나 서버의 모델·출력 형식을 점검합니다.
 
 Render의 Environment를 바꾼 뒤에는 저장·재배포하고 같은 의뢰에서 다시 시도합니다. 원인 확인을 위해 공유할 때는 화면의 오류 종류 또는 `AI diagnostic`의 상태·코드만 공유하세요. API 키나 학생 의뢰 내용을 보낼 필요가 없습니다.
+
+후보 생성은 엄격한 Structured Outputs(JSON Schema)를 사용합니다. AI 응답에서 `first`, `second`, `third` 후보와 필수 평가 항목을 지정하고 서버가 기존 후보 배열로 변환합니다. 지정한 `AI_MODEL`이 Chat Completions의 `json_schema` 응답을 지원해야 합니다(기본값 `gpt-4.1-mini`). 응답 형식 오류의 Render `AI diagnostic`에는 실제 출력이나 학생 원문 대신 `assessment.score`, `candidates.0.summary` 같은 실패 필드 경로만 기록합니다.

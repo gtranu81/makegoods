@@ -28,5 +28,6 @@ globalThis.fetch=async(url,options)=>{
  }
 
  const result={candidates:[1,2,3].map(id=>({title:`${context.activity} ${id}`,summary:'학생 의뢰를 반영한 제안',content:`학생의 요청: ${context.answers.map(a=>a.answer).join(' / ')}\n\n| 구분 | 제안 |\n| --- | --- |\n| 특징 | 제주 오름 |`})),assessment:{score:18,strengths:['자신의 생각을 구체적으로 적었어요.'],improvements:['모형을 만들어 살펴보세요.'],safety:'사실과 제안을 구분해요.'}};
+ if(payload.response_format?.type==='json_schema'){const [first,second,third]=result.candidates;result.candidates={first,second,third};}
  return Response.json({choices:[{message:{content:JSON.stringify(result)}}]});
 };
