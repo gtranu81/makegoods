@@ -1,11 +1,15 @@
 // Test-only provider: no request can reach the paid AI service.
+import {createHash} from 'node:crypto';
 import {appendFileSync,existsSync,readFileSync} from 'node:fs';
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=';
 globalThis.fetch=async(url,options)=>{
  if(!String(url).startsWith('https://api.openai.com/'))throw Error('Unexpected test network destination');
  const multipart=options.body instanceof FormData;
- const payload=multipart?Object.fromEntries([...options.body].map(([key,value])=>[key,typeof value==='string'?value:{size:value.size,type:value.type}])):JSON.parse(options.body);
- const context=String(url).includes('/chat/')?JSON.parse(payload.messages[1].content):null;
+ let payload;
+ if(multipart){payload={};for(const [key,value] of options.body){const safe=typeof value==='string'?value:{size:value.size,type:value.type,sha256:createHash('sha256').update(Buffer.from(await value.arrayBuffer())).digest('hex')};if(Object.hasOwn(payload,key))payload[key]=Array.isArray(payload[key])?[...payload[key],safe]:[payload[key],safe];else payload[key]=safe;}}
+ else payload=JSON.parse(options.body);
+ const content=payload.messages?.[1]?.content,text=Array.isArray(content)?content.find(c=>c.type==='text')?.text:content;
+ const context=String(url).includes('/chat/')?JSON.parse(text):null;
  appendFileSync(process.env.TEST_AI_LOG,JSON.stringify({url,payload,purpose:context?.purpose})+'\n');
  let control;try{if(existsSync(process.env.TEST_AI_FAIL))control=JSON.parse(readFileSync(process.env.TEST_AI_FAIL,'utf8'));}catch{}
  if(control?.stage==='text'&&context&&context.purpose!=='growth_analysis')return Response.json({error:{code:control.code,message:control.message}},{status:control.status});
@@ -27,7 +31,7 @@ globalThis.fetch=async(url,options)=>{
   return Response.json({choices:[{message:{content:JSON.stringify(report)}}]});
  }
 
- const result={candidates:[1,2,3].map(id=>({title:`${context.activity} ${id}`,summary:'학생 의뢰를 반영한 제안',content:`학생의 요청: ${context.answers.map(a=>a.answer).join(' / ')}\n\n| 구분 | 제안 |\n| --- | --- |\n| 특징 | 제주 오름 |`})),assessment:{score:18,strengths:['자신의 생각을 구체적으로 적었어요.'],improvements:['모형을 만들어 살펴보세요.'],safety:'사실과 제안을 구분해요.'}};
+ const result={candidates:[1,2,3].map(id=>({title:`${context.activity} ${id}`,summary:'학생 의뢰를 반영한 제안',content:`${context.studentSketch?'그림의 좋은 점: 학생 원본의 핵심 특징을 살려요.\n디자인 조언: 사용하기 편한 크기와 접는 방법을 확인해요.\n원본에서 유지할 핵심 특징: 형태와 기능.\n시안에 반영할 내용: 학생의 요청.\n':''}학생의 요청: ${context.answers.map(a=>a.answer).join(' / ')}\n\n| 구분 | 제안 |\n| --- | --- |\n| 특징 | 제주 오름 |`})),assessment:{score:18,strengths:['자신의 생각을 구체적으로 적었어요.'],improvements:['모형을 만들어 살펴보세요.'],safety:'사실과 제안을 구분해요.'}};
  if(payload.response_format?.type==='json_schema'){const [first,second,third]=result.candidates;result.candidates={first,second,third};}
  return Response.json({choices:[{message:{content:JSON.stringify(result)}}]});
 };

@@ -2,7 +2,7 @@ FROM node:24-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && mkdir -p /data && chown node:node /data
-COPY --chown=node:node server.js growth.js ai-errors.js consulting-result.js ./
+COPY --chown=node:node server.js growth.js ai-errors.js consulting-result.js student-sketch.js ./
 COPY --chown=node:node public ./public
 USER node
 ENV NODE_ENV=production PORT=3000 DB_PATH=/data/app.sqlite

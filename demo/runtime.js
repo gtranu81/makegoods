@@ -13,11 +13,12 @@
  const addLedger=(id,delta,reason)=>data.ledger.unshift({id:data.ledger.length+1,user_id:id,name:data.users.find(u=>u.id===id)?.name,delta,reason,created_at:timestamp()});
  function refresh(){data.users.forEach(u=>{if(u.role==='student'&&u.periodLimit===null&&u.coinDay!==today()){addLedger(u.id,u.dailyLimit-u.balance,'하루 코인 초기화');u.balance=u.dailyLimit;u.coinDay=today();}});}
  function outputType(r){const seen=new Set();while(r?.type==='revision'&&r.parentId&&!seen.has(r.id)){seen.add(r.id);r=data.requests.find(p=>p.id===r.parentId);}return r?.type||'revision';}
- function view(r){const copy=structuredClone(r);copy.outputType=outputType(r);if(current.role!=='teacher'){if(r.status!=='released'){delete copy.candidates;delete copy.assessment;delete copy.teacherNote;delete copy.source;}else copy.candidates=copy.candidates.filter(c=>copy.selected.includes(c.id));delete copy.selected;}return copy;}
+ function offlineSketch(r){const seen=new Set();const owner=r?.userId;while(r&&!seen.has(r.id)){seen.add(r.id);if(r.userId!==owner)return null;if(r.sketch)return r.sketch;r=data.requests.find(p=>p.id===r.parentId);}return null;}
+ function view(r){const copy=structuredClone(r);copy.outputType=outputType(r);copy.sketch=offlineSketch(r);if(current.role!=='teacher'){if(r.status!=='released'){delete copy.candidates;delete copy.assessment;delete copy.teacherNote;delete copy.source;}else copy.candidates=copy.candidates.filter(c=>copy.selected.includes(c.id));delete copy.selected;}return copy;}
  const growthPolicy=globalThis.growthPolicy;
  data.growthRecords??=[];data.growthEvents??=[];data.growthRevisions??=[];data.growthVersion??=0;
- function growthHistory(userId){return data.requests.filter(r=>r.userId===userId).toSorted((a,b)=>a.id-b.id).map((r,i)=>({id:r.id,userId:r.userId,sequence:i+1,type:r.type,activity:r.answers.activity||null,parentId:r.parentId,createdAt:r.createdAt,answers:r.answers,final:r.status==='released'?{candidates:r.candidates.filter(c=>r.selected.includes(c.id)),teacherNote:r.teacherNote,source:r.source,releasedAt:r.releasedAt}:null}));}
- function growthEvent(r,kind){data.growthEvents.push({id:data.growthEvents.length+1,requestId:r.id,userId:r.userId,kind,createdAt:timestamp(),data:structuredClone({answers:r.answers,candidates:r.candidates||[],source:r.source,selected:r.selected||[],images:(r.candidates||[]).filter(c=>c.imageUrl).map(c=>({candidateId:c.id,imageUrl:c.imageUrl}))})});}
+ function growthHistory(userId){return data.requests.filter(r=>r.userId===userId).toSorted((a,b)=>a.id-b.id).map((r,i)=>({id:r.id,userId:r.userId,sequence:i+1,type:r.type,activity:r.answers.activity||null,parentId:r.parentId,createdAt:r.createdAt,answers:r.answers,sketch:offlineSketch(r),final:r.status==='released'?{candidates:r.candidates.filter(c=>r.selected.includes(c.id)),teacherNote:r.teacherNote,source:r.source,releasedAt:r.releasedAt}:null}));}
+ function growthEvent(r,kind){data.growthEvents.push({id:data.growthEvents.length+1,requestId:r.id,userId:r.userId,kind,createdAt:timestamp(),data:structuredClone({answers:r.answers,candidates:r.candidates||[],source:r.source,selected:r.selected||[],sketch:((s)=>s?{requestId:s.requestId,mime:s.mime,size:s.size}:null)(offlineSketch(r)),images:(r.candidates||[]).filter(c=>c.imageUrl).map(c=>({candidateId:c.id,imageUrl:c.imageUrl}))})});}
  function refreshGrowth(userId,requestId){
   const all=growthHistory(userId),current=all.find(r=>r.id===requestId),history=all.filter(r=>r.id<=requestId);
   for(const kind of ['request','summary']){
@@ -33,7 +34,7 @@
   return {group:{id:group.id,name:group.name},history:growthHistory(userId),records:data.growthRecords.filter(r=>r.userId===userId).map(r=>{
    const teacher=current.role==='teacher',out={id:r.id,kind:r.kind,requestId:r.requestId,comparisonId:r.comparisonId,status:r.status,source:r.source,version:r.version,generatedAt:r.generatedAt,reviewedAt:r.reviewedAt,report:teacher?r.report:r.status==='approved'?Object.fromEntries(Object.entries(r.approved).filter(([key])=>!['teacherNarrative','teacherGuidance'].includes(key))):null};
    if(teacher)out.revisions=data.growthRevisions.filter(v=>v.recordId===r.id);return structuredClone(out);
-  }),...(current.role==='teacher'?{events:data.growthEvents.filter(e=>e.userId===userId)}:{})};
+  }),...(current.role==='teacher'?{events:data.growthEvents.filter(e=>e.userId===userId).map(e=>{const event=structuredClone(e);if(event.data.sketch&&!event.data.sketch.imageUrl)event.data.sketch=offlineSketch(data.requests.find(r=>r.id===event.data.sketch.requestId))||event.data.sketch;return event;})}:{})};
  }
  window.fetch=async(input,options={})=>{
   try{
@@ -94,7 +95,8 @@
       b.title=activity.name;b.answers={activity:code,...Object.fromEntries(['q1','q2','q3'].map(k=>[k,b.answers[k].trim()]))};
      }else if(!['idea','market','design','revision','marketing'].includes(b.type)||!b.title?.trim()||['goods','country','audience','purpose','details','format'].some(k=>!b.answers?.[k]?.trim()))error(400,'모든 내용을 적어 주세요.');
      if(b.parentId&&!data.requests.some(r=>r.id===b.parentId&&r.userId===current.id&&r.status==='released'))error(400,'전달된 결과에 추가 요청해 주세요.');
-     const r={id:Math.max(0,...data.requests.map(r=>r.id))+1,userId:current.id,groupName:current.name,parentId:b.parentId||null,type:b.type,title:b.title,answers:b.answers,status:'pending',createdAt:timestamp(),releasedAt:null};data.requests.unshift(r);growthEvent(r,'submitted');refreshGrowth(current.id,r.id);current.balance--;addLedger(current.id,-1,`의뢰 #${r.id} 제출`);out={id:r.id};
+     const decodedSketch=globalThis.studentSketchInput.decode(b.sketch);if(decodedSketch&&b.type!=='design'&&!(b.type==='revision'&&outputType(data.requests.find(r=>r.id===b.parentId))==='design'))error(400,'그림은 디자인 또는 디자인 수정 의뢰에 첨부해 주세요.');
+     const r={id:Math.max(0,...data.requests.map(r=>r.id))+1,userId:current.id,groupName:current.name,parentId:b.parentId||null,type:b.type,title:b.title,answers:b.answers,status:'pending',createdAt:timestamp(),releasedAt:null};if(decodedSketch)r.sketch={requestId:r.id,imageUrl:b.sketch,mime:decodedSketch.mime,size:decodedSketch.size};data.requests.unshift(r);growthEvent(r,'submitted');refreshGrowth(current.id,r.id);current.balance--;addLedger(current.id,-1,`의뢰 #${r.id} 제출`);out={id:r.id};
     }else{
      const match=path.match(/^\/requests\/(\d+)\/(generate|release)$/);if(!match)error(404,'오프라인 체험에서 지원하지 않는 기능입니다.');requireTeacher();const r=data.requests.find(r=>r.id===Number(match[1]));if(!r)error(404,'의뢰서를 찾을 수 없습니다.');if(r.status==='released')error(409,'이미 전송했습니다.');
      if(match[2]==='generate'&&r.answers.activity){
@@ -116,7 +118,7 @@
      }
     }
    }
-   if(typeof path==='string'&&/^\/requests\/\d+\/(generate|release)$/.test(path)&&out?.ok){const r=data.requests.find(r=>r.id===Number(path.split('/')[2]));growthEvent(r,path.endsWith('/generate')?'ai_draft':'teacher_final');if(path.endsWith('/release'))refreshGrowth(r.userId,r.id);}
+   if(typeof path==='string'&&/^\/requests\/\d+\/(generate|release)$/.test(path)&&out?.ok){const r=data.requests.find(r=>r.id===Number(path.split('/')[2]));if(path.endsWith('/generate')&&offlineSketch(r))for(const c of r.candidates)c.content+='\n\n학생 그림은 보존했습니다. 체험 모드에서는 첨부 그림의 실제 AI 분석과 이미지 생성을 하지 않습니다.';growthEvent(r,path.endsWith('/generate')?'ai_draft':'teacher_final');if(path.endsWith('/release'))refreshGrowth(r.userId,r.id);}
    save();return new Response(JSON.stringify(out),{status:200,headers:{'Content-Type':'application/json'}});
   }catch(e){return new Response(JSON.stringify({error:e.message}),{status:e.status||400,headers:{'Content-Type':'application/json'}});}
  };

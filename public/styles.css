@@ -22,3 +22,5 @@
 @media(min-width:761px){.sidebar{overflow-y:auto}}
 
 .brand>div:last-child{min-width:0;flex:1}.brand small{display:block;white-space:nowrap;letter-spacing:.4px;font-size:7px}
+
+.student-sketch-section{padding:20px;border:1px dashed #a8bea0;border-radius:12px;background:#f9fcf5}.student-sketch-original{margin:18px 0;padding:16px;border:1px solid var(--line);border-radius:10px;background:#fafcf7}.student-sketch-original figcaption{font-size:12px}.student-sketch-original .design-preview{margin:12px 0}.student-sketch-original p{font-size:11px}
